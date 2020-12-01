@@ -1,0 +1,399 @@
+Homework 5
+
+---
+title: "Homework 5"
+author: "Cathy Shi, Guanqi Zeng, Rob Kravec"
+date: "November 6, 2020"
+output: 
+  html_document:
+    toc: true
+    number_sections: false
+    toc_float: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+library(bench)
+library(tidyverse)
+library(dplyr)
+library(Matrix)
+library(cumstats)
+library(knitr)
+library(parallel)
+library(profvis)
+library(doMC)
+set.seed(1995)
+library(foreach)
+knitr::opts_chunk$set(echo = TRUE, eval = TRUE,
+                      message = FALSE, warning = FALSE, comment = NA,
+                      fig.width=8, fig.height=6)
+```
+
+
+## Task 1
+
+We'll approach this problem by writing several small functions that will be 
+combined to play blackjack.
+
+Initialize a shoe, which we won't alter in the course of playing blackjack
+
+```{r create-shoe}
+# Create initial deck. J, Q, K are all depicted as 10. Ace is depicted as 1
+# but will sometimes be counted as 11 (see code for hit_me() function)
+shoe <- rep(c(2:10, 10, 10, 10, 1), times = 4 * 7)
+```
+
+Create a function that returns a shuffled shoe with two 8's and one 9 removed
+
+```{r new-shoe-function}
+new_shoe <- function(shoe){
+  # Remove the starting cards
+  deck <- shoe[-c(which(shoe == 8)[1:2], which(shoe == 9)[1])]
+  
+  # Return shuffled deck
+  return(sample(x = deck, size = length(deck), replace = F))
+}
+```
+
+Define function for a person who decides to hit
+
+```{r hit-me-function}
+hit_me <- function(current_deck, personId) {
+  
+  # Show what hand value would be for each potential "hit"
+  potential_hits <- cumsum(c(personId, current_deck))
+  
+  # Detect aces. Add 1 to account for extra element in potential_hits
+  aces <- which(current_deck == 1) + 1
+  
+  # Check if there is an ace that needs to be incremented to an 11
+  if(potential_hits[aces[1]] <= 11) {
+    potential_hits[aces[1]: length(potential_hits)] <- 
+      potential_hits[aces[1]: length(potential_hits)] + 10
+  }
+  
+  # Find first instance greater than or equal to 17
+  stop_index <- which(potential_hits >= 17)[1]
+  
+  # Return list that contains the score corresponding to the personId and the
+  # remaining deck
+  return(list(personId = potential_hits[stop_index],
+         new_deck = current_deck[-c(1:stop_index)])
+         )
+}
+```
+
+Define function for a single hand using the "stand" strategy
+
+```{r stand-function}
+stand <- function() {
+  # Designate starting values for dealer and player
+  player <- 8 + 8
+  dealer <- 9
+  
+  # Generate a new shuffled deck
+  deck <- new_shoe(shoe = shoe)
+
+  # Have dealer hit until achieving 17 or more
+  dealer <- hit_me(current_deck = deck, personId = dealer)$personId
+  
+  # Check for dealer bust
+  if (dealer > 21) {
+    return(1)
+  }
+  
+  # Return result
+  return(player - dealer)
+}
+```
+
+Define function for a single hand using the "hit" strategy
+
+```{r hit-function}
+hit <- function(player_start) {
+  # Designate starting values for dealer and player
+  player <- player_start
+  dealer <- 9
+  
+  # Generate a new shuffled deck
+  deck <- new_shoe(shoe = shoe)
+  
+  # Have player hit until achieving 17 or more
+  player_hit <- hit_me(current_deck = deck, personId = player)
+  
+  # Early exit if player busts
+  if(player_hit$personId > 21) {
+    return(-1)
+  }
+  
+  # Have dealer hit until achieving 17 or more
+  dealer <- hit_me(current_deck = player_hit$new_deck, 
+                   personId = dealer)$personId
+  
+  # Early exit if dealer busts
+  if(dealer > 21) {
+    return(1)
+  }
+  
+    # Return result
+  return(player_hit$personId - dealer)
+}
+
+```
+
+Define function for a single hand using the "split" strategy
+
+```{r split-function}
+split <- function() {
+  # Initialize vector of final player scores
+  final_p_scores <- c()
+  
+  # Designate starting values for dealer and player
+  player <- 8
+  dealer <- 9
+  
+  # Generate a new shuffled deck
+  deck <- new_shoe(shoe = shoe)
+  
+  # Create a counter denoting the number of player hands (due to splitting)
+  hands <- 2
+  
+  # Perform as many splits as are needed
+  while(hands > 0) {
+    
+    # Check to see whether another split will be needed
+    if(deck[1] == 8) {
+      hands <- hands + 1
+    }
+    
+    # Play a round on a single hand
+    player_hit <- hit_me(current_deck = deck, personId = player)
+    hands <- hands - 1
+    final_p_scores <- c(final_p_scores, player_hit$personId)
+    deck <- player_hit$new_deck
+  }
+  
+  # Have dealer hit until achieving 17 or more
+  dealer <- hit_me(current_deck = player_hit$new_deck, 
+                   personId = dealer)$personId
+  
+  # Early exit if dealer busts
+  if(dealer > 21) {
+    return(1)
+  }
+  
+  # Recode hands in which the player busts to be an automatic defeat
+  bust_hands <- which(final_p_scores > 21)
+  final_p_scores[bust_hands] <- 1 # Use small value to create automatic defeat
+  
+  # Return results
+  results <- final_p_scores - dealer
+  wins <- sum(results > 0)
+  losses <- sum(results < 0)
+  if(wins > losses) {
+    return(1)
+  } else if (losses > wins) {
+    return(-1)
+  } else {
+    return(0)
+  }
+}
+```
+
+Run 20,000 simulations of each function, using parallel processing, and display 
+the results
+
+```{r sim-parallel}
+# Initiate parallel processes
+x <- list()
+nreps <- 20000
+x$stand <- mcparallel(replicate(n = nreps, stand()))
+x$hit <- mcparallel(replicate(n = nreps, hit(16)))
+x$split <- mcparallel(replicate(n = nreps, split()))
+
+# Collect results
+probs <- mccollect(x)
+
+# Calculate outcomes
+outcomes <- mclapply(probs, 
+                     function(x) c(mean(x > 0), mean(x < 0), mean(x == 0)),
+                     mc.cores = 4)
+
+# Display results
+results_df <- data.frame(Outcome = c("Win", "Lose", "Push"),
+                         Strategy = map(outcomes, `[`))
+colnames(results_df) <- c("Outcome","Stand", "Hit", "Split")
+kable(results_df)
+```
+
+Under these rules and without financial constraints, it would make sense to
+"split."
+
+
+## Task 2 - Benchmarking
+
+Use `bench::mark()` to evaluate the performance of the following sets of
+functions. Provide a written summary of your results along with a visualization
+or table-like object to communicate your findings.
+
+1. Compare `apply(X, 1, sum)` and `rowSums(X)`, where `X` is a p x p random
+   normal matrix. Consider values of p = 10, 100, 1,000, and 10,000. Use 10
+   iterations in your performance evaluation.
+
+```{r task2.1}
+p <- map2_dbl(1:4, 10, ~ .y ^ .x)
+X <- sapply(p, function(p) matrix(rnorm(p*p, 0, 1), nrow = p, ncol = p)) 
+benchmark1 <- list()
+
+registerDoMC(4)
+foreach (i = 1:4) %dopar% {
+  benchmark1[[i]] <- bench::mark(
+  apply(X[[i]], 1, sum),
+  rowSums(X[[i]]), 
+  iterations = 10
+  ) 
+  as.tibble(summary(benchmark1[[i]], relative = T)) %>%
+    select(-c("gc/sec", "memory", "gc", "n_gc", "result", "time")) %>% 
+    mutate("expression" = c("apply(X, 1, sum)", "rowSums(X)")) %>% 
+    print
+}
+```
+`rowSums(X)` is faster than `apply(X, 1, sum)` by its median, and the latter one
+uses up much more memory space than the first one as the size of X increases.
+
+
+2. Compare `any(x == 55)` and `55 %in% x`, where `x` is a random integer
+   vector of length n. Consider values of n = 10, 100, 1,000, and 10,000. Use
+   10,000 iterations in your performance evaluation. *Hint:* `sample()`.
+
+```{r task2.2}
+n <- map2_dbl(1:4, 10, ~ .y ^ .x)
+benchmark2 <- list()
+foreach (i = 1:4) %dopar% {
+  x <- sample.int(n[i])
+  benchmark2[[i]] <- bench::mark(
+  any(x == 55),
+  55 %in% x, 
+  iterations = 10000
+  ) 
+  as.tibble(summary(benchmark2[[i]], relative = T)) %>%
+    select(-c("gc/sec", "memory", "gc", "n_gc", "result", "time")) %>% 
+    mutate("expression" = c("any(x == 55)", "55 %in% x")) %>% 
+    print
+}
+```
+`any(x == 55)` is slightly faster than `55 %in% x` when size of x is relatively
+small, but in the last scenario with x's size is 10,000, `55 %in% x` is still 
+slower than the other expression but its minimum time is faster. `55 %in% x`
+uses slightly more of the memory storage than the other one.
+
+
+3. Compare `t(X) %*% X` and `crossprod(X)`, where `X` is a p x p random
+   normal matrix. Consider values of p = 10, 100, 1,000. Use the
+   `bench::mark()` default arguments. *Note:* use `crossprod()` from package
+   `Matrix`.
+   
+```{r task2.3}
+p <- map2_dbl(1:3, 10, ~ .y ^ .x)
+X <- sapply(p, function(p) matrix(rnorm(p*p, 0, 1), nrow = p, ncol = p)) 
+benchmark3 <- list()
+foreach (i = 1:3) %dopar% {
+  benchmark3[[i]] <- bench::mark(
+  t(X[[i]]) %*% X[[i]],
+  crossprod(X[[i]])
+  )
+  as.tibble(summary(benchmark3[[i]], relative = T)) %>%
+    select(-c("gc/sec", "memory", "gc", "n_gc", "result", "time")) %>% 
+    mutate("expression" = c("t(X) %*% X", "crossprod(X)")) %>% 
+    print
+}
+
+```
+`t(X) %*% X` is slightly faster than  `crossprod(X)` for the 10*10 matrix, but 
+the latter one is faster for larger matrices. Whichever is faster, whichever
+uses less memory.
+
+4. Compare `cummean(x)` from package `cumstats` with a function you develop
+   to also compute the cumulative mean for a vector `x`. Let `x` be a random
+   integer vector of length n. Consider values of n = 10, 100, 1,000, 10,000,
+   and 100,000. Use 10,000 iterations in your performance evaluation.
+   *Hint:* `sample()`.
+   
+```{r task2.4}
+my_cummean <- function(x) {
+  cumsum(as.numeric(x)) / 1:length(x)
+}
+
+n <- map2_dbl(1:5, 10, ~ .y ^ .x)
+benchmark4 <- list()
+foreach (i = 1:5) %dopar% {
+  x <- sample.int(n[[i]])
+  benchmark4[[i]] <- bench::mark(
+  my_cummean(x),
+  cummean(x),
+  iterations = 10000
+  )
+  as.tibble(summary(benchmark4[[i]], relative = T)) %>%
+    select(-c("gc/sec", "memory", "gc", "n_gc", "result", "time")) %>%
+    mutate("expression" = c("my_cummean(x)", "cummean(x)")) %>%
+    print
+}
+
+```
+
+
+The `cummean(x)` function is slightly faster the self-created function 
+`my_cummean(x)` at first when n is small, but `my_cummean(x)`'s performance is
+improving as n increases. When n = 100,000, it's almost as fast as `cummean(x)`.
+We predict that when n gets even larger, `my_cummean(x)` will at least be 
+as efficient as the other one. Both use about the same amount of memories.
+
+
+
+## Task 3 - Improving Performance
+Reference https://adv-r.hadley.nz/perf-improve.html
+
+```{r task3-code}
+p <- 100000
+n <- 70
+
+X <- matrix(rnorm(p * n, 12, 4), nrow = p, ncol = n) # p x n matrix
+group_levels <- rep(0:1, each = n / 2)
+
+system.time({
+    n = ncol(X)/2
+    
+    m0 <- rowMeans(X[, group_levels == 0])
+    var0 <- rowSums((X[, group_levels == 0]- m0) ^ 2)/(n-1)
+    
+    m1 <- rowMeans(X[, group_levels == 1])
+    var1 <- rowSums((X[, group_levels == 1]- m1) ^ 2)/(n-1)
+    
+    t_stat <- (m0 - m1)/sqrt((var0 + var1)/n)
+})
+```
+
+```{r task3-profiling}
+profvis({
+    n = ncol(X)/2
+    
+    m0 <- rowMeans(X[, group_levels == 0])
+    var0 <- rowSums((X[, group_levels == 0]- m0) ^ 2)/(n-1)
+    
+    m1 <- rowMeans(X[, group_levels == 1])
+    var1 <- rowSums((X[, group_levels == 1]- m1) ^ 2)/(n-1)
+    
+    t_stat <- (m0 - m1)/sqrt((var0 + var1)/n)
+})
+```
+
+To improve the performance, we profiled the original code and found that we need
+to replace the `t.test()`, as it takes the longest time and produces unnecessary 
+outputs. The next thing we needed to improve is the loop. Thus, we coded the 
+process for calculating t-statistics ourselvse. In addition, we used `rowMeans()` 
+and `rowSums()` to avoid using loop. The final output takes about 0.16 seconds. 
+
+By profiling our improved codes, we found that the implementations of 
+`rowMeans()` and `rowSums()` take longer time. Besides, as garbage collector
+is not running, the codes do not take up unnecessary storage.
+
