@@ -47,4 +47,6 @@ to make their decisions
 ## Acknowledgements
 
 This project was completed as part of STA 523 (Statistical Programming) at 
-Duke, taught by Professor Shawn Santo
+Duke, taught by Professor Shawn Santo. While the code for this portion of the
+project is completely my own, two of of classmates, Cathy Shi and Guanqi Zeng,
+provided valuable problem-solving support.
