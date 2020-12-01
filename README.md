@@ -38,6 +38,7 @@ following simplifying assumptions:
 There are several ways in which this project could be extended:
 
 - Remove one or more of the assumptions listed above
+- Add in a betting component to the game
 - Allow for more potential starting hands than 8 and 8 for the player and
 9 for the dealter
 - Create an interactive game (e.g., through a Shiny app), providing 
