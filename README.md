@@ -1,3 +1,12 @@
+# Blackjack simulations with parallel processing
+
+## Description
+
+In this repository, we consider a specific blackjack scenario in
+which the player (me, I suppose) is dealt two 8's, and the dealer
+shows a 9. To determine the optimal strategy (hit vs. stand vs. split),
+we run 10,000 simulations of each strategy and analyze the outcomes.
+
 # STA 523 :: Homework 5
 
 > We should forget about small efficiencies, say about 97% of the time:
